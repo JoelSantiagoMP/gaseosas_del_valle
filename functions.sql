@@ -79,6 +79,27 @@ BEGIN
     END IF;
 END//
 
+-- Crear una funcio n MySQL llamada calcular_promedio_pedidos_cliente que:
+-- ➢ Reciba como para metro el ID de un cliente.
+-- ➢ Retorne el promedio del total (sin IVA) de todos los pedidos realizados por ese cliente.
+-- ➢ Si el cliente no tiene pedidos, retorne 0.
+
+create function fn_calcular_promedio_pedidos_cliente(p_id_cliente INT)
+returns decimal(12,2)
+DETERMINISTIC
+reads sql DATA
+begin
+    declare v_promedio_total decimal(12,2) default 0.00;
+
+    select ifnull(avg(total_sin_iva), 0.00)
+    into v_promedio_total
+    from pedidos
+    where id_cliente = p_id_cliente;
+
+    return v_promedio_total;
+end//
+
+
 DELIMITER ;
 
 

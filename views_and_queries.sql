@@ -194,6 +194,42 @@ LEFT JOIN pedidos pe ON pe.id_sede = s.id_sede
 GROUP BY s.id_sede, s.nombre_sede
 ORDER BY ingresos_con_iva DESC;
 
+
+-- Crear una vista llamada vista_resumen_sedes que:
+-- ➢ Muestre por cada sede:
+-- ▪ Nombre de la sede
+-- ▪ Cantidad total de pedidos despachados
+-- ▪ Valor total vendido (sin IVA)
+-- ▪ Promedio de valor por pedido
+-- ▪ La vista debe usar JOIN entre pedidos y sedes, y agrupar correctamente los
+-- resultados
+
+create or replace view vista_resumen_sedes AS
+select
+    s.id_sede,
+    s.nombre_sede,
+    count(p.id_pedido) as total_pedidos,
+    ifnull(sum(p.total_sin_iva), 0) as venta_total, 
+    ifnull(avg(p.total_sin_iva), 0) as promedio_venta
+from sedes s
+join pedidos p on p.id_sede = s.id_sede
+group by s.id_sede, s.nombre_sede;
+
+
+
+-- Realizar una consulta con subconsulta que:
+-- ➢ Muestre el nombre del producto, categorí a y stock
+-- ➢ Solo incluya los productos cuyo precio sea mayor al promedio general de precios de todos
+-- los productos.
+
+select
+    id_producto,
+    categoria,
+    stock_actual
+from productos
+where precio > (select avg(precio) from productos);
+
+
 -- ============================================================================
 -- END OF views_and_queries.sql
 -- ============================================================================

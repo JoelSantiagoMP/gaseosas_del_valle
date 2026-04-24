@@ -167,6 +167,16 @@ SELECT fn_validar_stock(9999, 1);
 
 ---
 
+### 3.3 `fn_calcular_promedio_pedidos_cliente(p_id_cliente INT)`
+
+**Propósito**: Calcular el promedio del coste de los pedidos de un cliente determinado.
+
+**Lógica interna**:
+
+1. **Saca el promedio de ventas**: Recupera el promedio de ventas `total_sin_iva` y lo inserta en la variable `v_promedio_total`.
+2. **Compara el id**: Hace una comparación de los id de cliente en la tabla pedidos con el parámetro `p_id_cliente` en la función.
+3. **Verificación de los valores**: En caso de no encontrar el id solicitado en la tabla, no devuelve nada, y si el cliente solicitado no ha realizado ningun pedido, devuelve cero la funcion.
+
 ## 4. Explicación Técnica de los Triggers
 
 ### 4.1 `tr_actualizar_stock` — AFTER INSERT en `detalle_pedidos`
@@ -460,6 +470,27 @@ ORDER BY ingresos_con_iva DESC;
 ```
 
 ---
+
+### Consulta 9: Mostrar productos que su precio sea mayor al promedio de todos.
+
+```sql
+select
+    id_producto,
+    categoria,
+    stock_actual
+from productos
+where precio > (select avg(precio) from productos);
+```
+
+```
+2	Gaseosas	80
+12	Maltas	60
+14	Energizantes	40
+15	Hidratantes	75
+16	Hidratantes	65
+17	Tés	55
+18	Tés	50
+```
 
 ## 6. Recomendaciones para Expansión Futura
 

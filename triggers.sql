@@ -91,7 +91,8 @@ BEGIN
     END IF;
 END//
 
-DELIMITER ;
+
+
 
 -- ============================================================================
 -- POST-SEED: Recalcular totales de pedidos existentes
@@ -110,6 +111,28 @@ UPDATE pedidos p
        ),
        total_con_iva = fn_calcular_total_con_iva(p.id_pedido);
 
+
+
+-- ➢ Crear un trigger llamado auditar_cambio_precio que:
+-- ➢ Se ejecute despue s de un UPDATE en la tabla de productos.
+-- • Registre en una tabla auditoria_precios los campos:
+-- ➢ id_producto, precio_anterior, precio_nuevo, fecha_modificacion.
+-- ➢ Solo se debe registrar si el precio realmente cambio .
+
+
+
+CREATE TRIGGER tr_auditar_cambio_precio
+BEFORE UPDATE ON productos
+FOR EACH ROW
+BEGIN
+    -- Solo registrar si el precio realmente cambió
+    IF OLD.precio <> NEW.precio THEN
+        INSERT INTO auditoria_precios (id_producto, precio_anterior, precio_nuevo, fecha_cambio)
+        VALUES (OLD.id_producto, OLD.precio, NEW.precio, NOW());
+    END IF;
+END//
+
+DELIMITER ;
 -- ============================================================================
 -- END OF triggers.sql
 -- ============================================================================
