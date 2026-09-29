@@ -1,5 +1,10 @@
 
+SET NAMES utf8mb4;
 USE gaseosas_del_valle;
+
+DROP FUNCTION IF EXISTS fn_calcular_total_con_iva;
+DROP FUNCTION IF EXISTS fn_validar_stock;
+DROP FUNCTION IF EXISTS fn_calcular_promedio_pedidos_cliente;
 
 DELIMITER //
 
@@ -42,7 +47,7 @@ END//
 --
 -- Parámetros: p_id_producto  — ID del producto a validar.
 --             p_cantidad     — cantidad requerida.
--- Retorna   : VARCHAR(80) con uno de tres estados:
+-- Retorna   : VARCHAR(150) con uno de tres estados:
 --               'DISPONIBLE'   — el stock es suficiente.
 --               'INSUFICIENTE' — el stock es menor a la cantidad pedida.
 --               'NO_ENCONTRADO'— el producto no existe en la tabla.
@@ -51,7 +56,7 @@ END//
 --   SELECT fn_validar_stock(1, 10);
 -- ---------------------------------------------------------------------------
 CREATE FUNCTION fn_validar_stock(p_id_producto INT, p_cantidad INT)
-RETURNS VARCHAR(80)
+RETURNS VARCHAR(150)
 DETERMINISTIC
 READS SQL DATA
 BEGIN
@@ -79,25 +84,33 @@ BEGIN
     END IF;
 END//
 
--- Crear una funcio n MySQL llamada calcular_promedio_pedidos_cliente que:
--- ➢ Reciba como para metro el ID de un cliente.
--- ➢ Retorne el promedio del total (sin IVA) de todos los pedidos realizados por ese cliente.
--- ➢ Si el cliente no tiene pedidos, retorne 0.
-
-create function fn_calcular_promedio_pedidos_cliente(p_id_cliente INT)
-returns decimal(12,2)
+-- ---------------------------------------------------------------------------
+-- fn_calcular_promedio_pedidos_cliente
+-- ---------------------------------------------------------------------------
+-- Propósito : Calcula el promedio de total_sin_iva de los pedidos de un
+--             cliente.
+--
+-- Parámetro : p_id_cliente — ID del cliente.
+-- Retorna   : DECIMAL(12,2) — promedio sin IVA.
+--             Retorna 0.00 si el cliente no existe o no tiene pedidos.
+--
+-- Ejemplo de uso:
+--   SELECT fn_calcular_promedio_pedidos_cliente(1);
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION fn_calcular_promedio_pedidos_cliente(p_id_cliente INT)
+RETURNS DECIMAL(12,2)
 DETERMINISTIC
-reads sql DATA
-begin
-    declare v_promedio_total decimal(12,2) default 0.00;
+READS SQL DATA
+BEGIN
+    DECLARE v_promedio_total DECIMAL(12,2) DEFAULT 0.00;
 
-    select ifnull(avg(total_sin_iva), 0.00)
-    into v_promedio_total
-    from pedidos
-    where id_cliente = p_id_cliente;
+    SELECT IFNULL(AVG(total_sin_iva), 0.00)
+      INTO v_promedio_total
+      FROM pedidos
+     WHERE id_cliente = p_id_cliente;
 
-    return v_promedio_total;
-end//
+    RETURN v_promedio_total;
+END//
 
 
 DELIMITER ;

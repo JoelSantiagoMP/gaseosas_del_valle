@@ -1,4 +1,8 @@
 
+-- Garantiza que los literales UTF-8 (ñ, tildes) se almacenen bien
+-- aunque el cliente se conecte con latin1 por defecto.
+SET NAMES utf8mb4;
+
 DROP DATABASE IF EXISTS gaseosas_del_valle;
 CREATE DATABASE gaseosas_del_valle
     CHARACTER SET utf8mb4
@@ -88,6 +92,8 @@ CREATE TABLE detalle_pedidos (
     cantidad     INT           NOT NULL,
     subtotal     DECIMAL(12,2) NOT NULL,
     PRIMARY KEY (id_detalle),
+    CONSTRAINT chk_cantidad_positiva   CHECK (cantidad > 0),
+    CONSTRAINT chk_subtotal_no_negativo CHECK (subtotal >= 0),
     CONSTRAINT fk_detalle_pedido
         FOREIGN KEY (id_pedido) REFERENCES pedidos (id_pedido)
         ON DELETE CASCADE ON UPDATE CASCADE,

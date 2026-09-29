@@ -20,7 +20,7 @@ El presente proyecto implementa un **sistema de base de datos relacional en MySQ
 | `database.sql` | DDL completo (tablas, restricciones, relaciones) + datos semilla |
 | `functions.sql` | Funciones almacenadas: cálculo de IVA y validación de stock |
 | `triggers.sql` | Triggers de automatización + recálculo post-seed |
-| `views_and_queries.sql` | 3 vistas consolidadas + 8 consultas analíticas |
+| `views_and_queries.sql` | 4 vistas consolidadas + 9 consultas analíticas |
 | `README.md` | Documentación técnica del proyecto |
 
 ### Orden de Ejecución
@@ -28,11 +28,13 @@ El presente proyecto implementa un **sistema de base de datos relacional en MySQ
 Los scripts deben ejecutarse secuencialmente, respetando las dependencias:
 
 ```bash
-mysql -u root -p < database.sql                              # 1. Esquema + datos
-mysql -u root -p gaseosas_del_valle < functions.sql          # 2. Funciones (requeridas por triggers)
-mysql -u root -p gaseosas_del_valle < triggers.sql           # 3. Triggers + recálculo de totales
-mysql -u root -p gaseosas_del_valle < views_and_queries.sql  # 4. Vistas + consultas
+mysql -u root -p --default-character-set=utf8mb4 < database.sql
+mysql -u root -p --default-character-set=utf8mb4 gaseosas_del_valle < functions.sql
+mysql -u root -p --default-character-set=utf8mb4 gaseosas_del_valle < triggers.sql
+mysql -u root -p --default-character-set=utf8mb4 gaseosas_del_valle < views_and_queries.sql
 ```
+
+Cada script comienza con `SET NAMES utf8mb4`. El flag `--default-character-set=utf8mb4` evita que el cliente recodifique mal las tildes y la eñe si su charset por defecto es `latin1`. `functions.sql` y `triggers.sql` se pueden volver a ejecutar: eliminan las rutinas anteriores antes de crearlas.
 
 > **Nota de diseño**: Los datos semilla se insertan en `database.sql` *antes* de que los triggers existan. Esto es intencional: evita la doble sustracción de stock. El script `triggers.sql` incluye un `UPDATE` post-seed que recalcula `total_sin_iva` y `total_con_iva` para todos los pedidos usando `fn_calcular_total_con_iva`.
 
@@ -72,8 +74,8 @@ mysql -u root -p gaseosas_del_valle < views_and_queries.sql  # 4. Vistas + consu
 │ PK id_detalle                                                         │
 │ FK id_pedido  ──→ pedidos   (CASCADE  / CASCADE)                      │
 │ FK id_producto──→ productos (RESTRICT / CASCADE)                      │
-│    cantidad    (INT)                                                   │
-│    subtotal    (DECIMAL 12,2)                                         │
+│    cantidad    (INT, CHK > 0)                                         │
+│    subtotal    (DECIMAL 12,2, CHK ≥ 0)                                │
 └───────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────┐
@@ -86,9 +88,9 @@ mysql -u root -p gaseosas_del_valle < views_and_queries.sql  # 4. Vistas + consu
 │    fecha_cambio   (TIMESTAMP) │
 └──────────────────────────────┘
 ```
-# Imagen del modelo Entidad Relacion (Hecho en DrawSql.app)
+Diagrama entidad-relación (DrawSQL):
 
-![alt text](image.png)
+![Diagrama entidad-relación de Gaseosas del Valle](image.png)
 
 
 ### Cardinalidades
@@ -106,10 +108,14 @@ mysql -u root -p gaseosas_del_valle < views_and_queries.sql  # 4. Vistas + consu
 La tabla `productos` incorpora tres restricciones `CHECK` para garantizar la integridad a nivel de dominio:
 
 ```sql
-CONSTRAINT chk_precio_positivo   CHECK (precio >= 0)
-CONSTRAINT chk_stock_actual_pos  CHECK (stock_actual >= 0)
-CONSTRAINT chk_stock_minimo_pos  CHECK (stock_minimo >= 0)
+CONSTRAINT chk_precio_positivo      CHECK (precio >= 0)
+CONSTRAINT chk_stock_actual_pos     CHECK (stock_actual >= 0)
+CONSTRAINT chk_stock_minimo_pos     CHECK (stock_minimo >= 0)
+CONSTRAINT chk_cantidad_positiva    CHECK (cantidad > 0)
+CONSTRAINT chk_subtotal_no_negativo CHECK (subtotal >= 0)
 ```
+
+`cantidad > 0` evita líneas de detalle que el trigger de stock interpretaría como una devolución (una cantidad negativa suma inventario).
 
 ---
 
@@ -147,7 +153,7 @@ SELECT fn_calcular_total_con_iva(1);
    - Si `stock_actual >= p_cantidad` → retorna `'DISPONIBLE: ...'` con stock actual y cantidad solicitada.
    - Si `stock_actual < p_cantidad` → retorna `'INSUFICIENTE: ...'` indicando el déficit exacto de unidades.
 
-**Retorno**: `VARCHAR(80)` — mensaje descriptivo con el estado y los datos numéricos relevantes.
+**Retorno**: `VARCHAR(150)` — mensaje descriptivo con el estado y los datos numéricos relevantes. El ancho cubre cantidades de tipo `INT` sin truncar el texto bajo `STRICT_TRANS_TABLES`.
 
 **Justificación de diseño**: Retornar `VARCHAR` en lugar de `BOOLEAN` permite que la capa de aplicación reciba información diagnóstica sin ejecutar consultas adicionales. El mensaje incluye el stock actual, la cantidad solicitada y el déficit (si aplica), facilitando la depuración y la experiencia de usuario en sistemas front-end.
 
@@ -169,13 +175,22 @@ SELECT fn_validar_stock(9999, 1);
 
 ### 3.3 `fn_calcular_promedio_pedidos_cliente(p_id_cliente INT)`
 
-**Propósito**: Calcular el promedio del coste de los pedidos de un cliente determinado.
+**Propósito**: Calcular el promedio del total sin IVA de todos los pedidos de un cliente.
 
 **Lógica interna**:
 
-1. **Saca el promedio de ventas**: Recupera el promedio de ventas `total_sin_iva` y lo inserta en la variable `v_promedio_total`.
-2. **Compara el id**: Hace una comparación de los id de cliente en la tabla pedidos con el parámetro `p_id_cliente` en la función.
-3. **Verificación de los valores**: En caso de no encontrar el id solicitado en la tabla, no devuelve nada, y si el cliente solicitado no ha realizado ningun pedido, devuelve cero la funcion.
+1. **Promedio**: Ejecuta `AVG(total_sin_iva)` sobre `pedidos` filtrando por `id_cliente = p_id_cliente`.
+2. **Sin pedidos**: Si el cliente no existe o no tiene pedidos, `AVG` devuelve `NULL` y `IFNULL` lo convierte en `0.00`.
+
+**Retorno**: `DECIMAL(12,2)`. Con los datos semilla, cada cliente tiene un solo pedido, así que el promedio coincide con `total_sin_iva` de ese pedido.
+
+```sql
+SELECT fn_calcular_promedio_pedidos_cliente(1);
+-- 204000.00
+
+SELECT fn_calcular_promedio_pedidos_cliente(99);
+-- 0.00
+```
 
 ## 4. Explicación Técnica de los Triggers
 
@@ -244,7 +259,7 @@ UPDATE productos SET precio = 4000.00 WHERE id_producto = 1;
 
 ## 5. Evidencia de Ejecución — Consultas Analíticas
 
-A continuación se presentan los resultados esperados de las 8 consultas requeridas, calculados a partir de los datos semilla del sistema.
+A continuación se presentan los resultados esperados de las consultas analíticas, calculados a partir de los datos semilla del sistema. Los totales de pedido quedan en cero hasta ejecutar el `UPDATE` final de `triggers.sql`.
 
 ### Consulta 1: Productos por debajo del umbral mínimo de stock
 
@@ -276,9 +291,12 @@ SELECT pe.id_pedido, pe.fecha_pedido, c.nombre_completo AS cliente,
 FROM pedidos pe
 JOIN clientes c ON c.id_cliente = pe.id_cliente
 JOIN sedes    s ON s.id_sede    = pe.id_sede
-WHERE pe.fecha_pedido BETWEEN '2026-04-01' AND '2026-04-10'
+WHERE pe.fecha_pedido >= '2026-04-01 00:00:00'
+  AND pe.fecha_pedido <  '2026-04-11 00:00:00'
 ORDER BY pe.fecha_pedido;
 ```
+
+> `BETWEEN '2026-04-01' AND '2026-04-10'` compara el `DATETIME` contra `2026-04-10 00:00:00` y excluye el pedido 7 (`2026-04-10 08:00:00`). El límite superior exclusivo del día siguiente incluye esa jornada completa.
 
 ```
 +-----------+---------------------+---------------------------------+------------------+---------------+---------------+
@@ -304,33 +322,35 @@ SELECT pr.id_producto, pr.nombre, pr.categoria,
 FROM detalle_pedidos dp
 JOIN productos pr ON pr.id_producto = dp.id_producto
 GROUP BY pr.id_producto, pr.nombre, pr.categoria
-ORDER BY total_unidades_vendidas DESC;
+ORDER BY total_unidades_vendidas DESC, pr.nombre;
 ```
 
+El desempate es alfabético por nombre. Pony Malta 1.5L no tiene ventas y no aparece.
+
 ```
-+-------------+----------------------------+--------------+------------------------+------------------+
++-------------+----------------------------+--------------+-------------------------+------------------+
 | id_producto | nombre                     | categoria    | total_unidades_vendidas | ingresos_totales |
-+-------------+----------------------------+--------------+------------------------+------------------+
-|           1 | Coca-Cola Original         | Gaseosas     |                     64 |        224000.00 |
-|           6 | Agua Cristal 600ml         | Aguas        |                     70 |        140000.00 |
-|           4 | Sprite 600ml               | Gaseosas     |                     33 |         99000.00 |
-|          11 | Pony Malta 330ml           | Maltas       |                     30 |         90000.00 |
-|           2 | Coca-Cola 1.5L             | Gaseosas     |                     30 |        195000.00 |
-|           7 | Agua Cristal 1.5L          | Aguas        |                     25 |         87500.00 |
-|          15 | Gatorade Limón 500ml       | Hidratantes  |                     20 |         90000.00 |
-|           9 | Jugo Hit Lulo 250ml        | Jugos        |                     20 |         56000.00 |
-|          14 | Red Bull 250ml             | Energizantes |                     16 |        120000.00 |
-|           8 | Jugo Hit Mango 250ml       | Jugos        |                     15 |         42000.00 |
-|          10 | Jugo Hit Mora 250ml        | Jugos        |                     15 |         42000.00 |
-|          16 | Gatorade Naranja 500ml     | Hidratantes  |                     15 |         67500.00 |
-|           3 | Pepsi Lata                 | Gaseosas     |                     12 |         38400.00 |
-|          13 | Colombiana 350ml           | Gaseosas     |                     12 |         37200.00 |
-|          19 | Agua con Gas Manantial     | Aguas        |                     12 |         30000.00 |
-|           5 | Fanta Naranja 350ml        | Gaseosas     |                     10 |         33000.00 |
-|          17 | Té Fuze Limón 400ml        | Tés          |                     10 |         38000.00 |
-|          18 | Té Fuze Durazno 400ml      | Tés          |                     10 |         38000.00 |
-|          20 | Manzana Postobón 350ml     | Gaseosas     |                      8 |         24800.00 |
-+-------------+----------------------------+--------------+------------------------+------------------+
++-------------+----------------------------+--------------+-------------------------+------------------+
+|           6 | Agua Cristal 600ml         | Aguas        |                      70 |        140000.00 |
+|           1 | Coca-Cola Original         | Gaseosas     |                      64 |        224000.00 |
+|           4 | Sprite 600ml               | Gaseosas     |                      33 |         99000.00 |
+|           2 | Coca-Cola 1.5L             | Gaseosas     |                      30 |        195000.00 |
+|          11 | Pony Malta 330ml           | Maltas       |                      30 |         90000.00 |
+|           7 | Agua Cristal 1.5L          | Aguas        |                      25 |         87500.00 |
+|          15 | Gatorade Limón 500ml       | Hidratantes  |                      20 |         90000.00 |
+|           9 | Jugo Hit Lulo 250ml        | Jugos        |                      20 |         56000.00 |
+|          14 | Red Bull 250ml             | Energizantes |                      16 |        120000.00 |
+|          16 | Gatorade Naranja 500ml     | Hidratantes  |                      15 |         67500.00 |
+|           8 | Jugo Hit Mango 250ml       | Jugos        |                      15 |         42000.00 |
+|          10 | Jugo Hit Mora 250ml        | Jugos        |                      15 |         42000.00 |
+|          19 | Agua con Gas Manantial 600ml | Aguas      |                      12 |         30000.00 |
+|          13 | Colombiana 350ml           | Gaseosas     |                      12 |         37200.00 |
+|           3 | Pepsi Lata                 | Gaseosas     |                      12 |         38400.00 |
+|           5 | Fanta Naranja 350ml        | Gaseosas     |                      10 |         33000.00 |
+|          18 | Té Fuze Durazno 400ml      | Tés          |                      10 |         38000.00 |
+|          17 | Té Fuze Limón 400ml        | Tés          |                      10 |         38000.00 |
+|          20 | Manzana Postobón 350ml     | Gaseosas     |                       8 |         24800.00 |
++-------------+----------------------------+--------------+-------------------------+------------------+
 19 rows in set
 ```
 
@@ -343,7 +363,7 @@ SELECT c.id_cliente, c.nombre_completo,
 FROM clientes c
 LEFT JOIN pedidos pe ON pe.id_cliente = c.id_cliente
 GROUP BY c.id_cliente, c.nombre_completo
-ORDER BY cantidad_pedidos DESC;
+ORDER BY cantidad_pedidos DESC, c.id_cliente;
 ```
 
 ```
@@ -406,15 +426,15 @@ ORDER BY categoria, nombre;
 | id_producto | nombre                 | categoria    | precio  | stock_actual |
 +-------------+------------------------+--------------+---------+--------------+
 |          14 | Red Bull 250ml         | Energizantes | 7500.00 |           40 |
-|           1 | Coca-Cola Original     | Gaseosas     | 3500.00 |          120 |
 |           2 | Coca-Cola 1.5L         | Gaseosas     | 6500.00 |           80 |
+|           1 | Coca-Cola Original     | Gaseosas     | 3500.00 |          120 |
 |          13 | Colombiana 350ml       | Gaseosas     | 3100.00 |           85 |
 |           5 | Fanta Naranja 350ml    | Gaseosas     | 3300.00 |           70 |
 |          20 | Manzana Postobón 350ml | Gaseosas     | 3100.00 |          100 |
 |           3 | Pepsi Lata             | Gaseosas     | 3200.00 |           95 |
 |           4 | Sprite 600ml           | Gaseosas     | 3000.00 |          110 |
-|           8 | Jugo Hit Mango 250ml   | Jugos        | 2800.00 |          130 |
 |           9 | Jugo Hit Lulo 250ml    | Jugos        | 2800.00 |          100 |
+|           8 | Jugo Hit Mango 250ml   | Jugos        | 2800.00 |          130 |
 |          10 | Jugo Hit Mora 250ml    | Jugos        | 2800.00 |           90 |
 +-------------+------------------------+--------------+---------+--------------+
 11 rows in set
@@ -429,7 +449,7 @@ JOIN (
     SELECT id_cliente, COUNT(*) AS cantidad_pedidos
     FROM pedidos
     GROUP BY id_cliente
-    ORDER BY cantidad_pedidos DESC
+    ORDER BY cantidad_pedidos DESC, id_cliente
     LIMIT 1
 ) sub ON sub.id_cliente = c.id_cliente;
 ```
@@ -443,7 +463,7 @@ JOIN (
 1 row in set
 ```
 
-> **Nota**: Con los datos semilla, todos los clientes tienen exactamente 1 pedido. `LIMIT 1` retorna el primero por orden natural de inserción. En un entorno productivo con múltiples pedidos por cliente, esta consulta identificará al cliente más recurrente.
+> **Nota**: Con los datos semilla, todos los clientes tienen exactamente 1 pedido. El segundo criterio `id_cliente` hace el resultado determinista y devuelve al cliente 1. Si varios clientes empatan en el máximo, gana el de menor `id_cliente`.
 
 ### Consulta 8: Ingresos agrupados por sede
 
@@ -473,24 +493,38 @@ ORDER BY ingresos_con_iva DESC;
 
 ### Consulta 9: Mostrar productos que su precio sea mayor al promedio de todos.
 
+El promedio del catálogo semilla es `75200 / 20 = 3760.00`. La consulta devuelve nombre, categoría y stock, ordenados por precio descendente.
+
 ```sql
-select
-    id_producto,
-    categoria,
-    stock_actual
-from productos
-where precio > (select avg(precio) from productos);
+SELECT nombre, categoria, stock_actual
+FROM productos
+WHERE precio > (SELECT AVG(precio) FROM productos)
+ORDER BY precio DESC, nombre;
 ```
 
 ```
-2	Gaseosas	80
-12	Maltas	60
-14	Energizantes	40
-15	Hidratantes	75
-16	Hidratantes	65
-17	Tés	55
-18	Tés	50
++-------------------------+--------------+--------------+
+| nombre                  | categoria    | stock_actual |
++-------------------------+--------------+--------------+
+| Red Bull 250ml          | Energizantes |           40 |
+| Coca-Cola 1.5L          | Gaseosas     |           80 |
+| Pony Malta 1.5L         | Maltas       |           60 |
+| Gatorade Limón 500ml    | Hidratantes  |           75 |
+| Gatorade Naranja 500ml  | Hidratantes  |           65 |
+| Té Fuze Durazno 400ml   | Tés          |           50 |
+| Té Fuze Limón 400ml     | Tés          |           55 |
++-------------------------+--------------+--------------+
+7 rows in set
 ```
+
+### Vistas
+
+| Vista | Contenido |
+|---|---|
+| `vista_resumen_pedidos_por_sede` | Pedidos e ingresos con y sin IVA. Incluye sedes sin ventas (`LEFT JOIN`). |
+| `vista_productos_bajo_stock` | Productos con `stock_actual <= stock_minimo`. |
+| `vista_clientes_activos` | Clientes con al menos un pedido. |
+| `vista_resumen_sedes` | Pedidos, venta sin IVA y promedio por pedido. Solo sedes con ventas (`INNER JOIN`). |
 
 ## 6. Recomendaciones para Expansión Futura
 

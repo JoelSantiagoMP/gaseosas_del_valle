@@ -1,4 +1,5 @@
 
+SET NAMES utf8mb4;
 USE gaseosas_del_valle;
 
 -- ============================================================================
@@ -52,7 +53,7 @@ INNER JOIN pedidos p ON p.id_cliente = c.id_cliente;
 
 
 -- ============================================================================
--- CONSULTAS ANALÍTICAS (8 requeridas)
+-- CONSULTAS ANALÍTICAS
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -88,7 +89,11 @@ SELECT
 FROM pedidos pe
 JOIN clientes c ON c.id_cliente = pe.id_cliente
 JOIN sedes    s ON s.id_sede    = pe.id_sede
-WHERE pe.fecha_pedido BETWEEN '2026-04-01' AND '2026-04-10'
+-- El límite superior es exclusivo al día siguiente: un DATETIME comparado
+-- con la fecha '2026-04-10' se evalúa como '2026-04-10 00:00:00' y dejaría
+-- fuera los pedidos del 10 de abril posteriores a la medianoche.
+WHERE pe.fecha_pedido >= '2026-04-01 00:00:00'
+  AND pe.fecha_pedido <  '2026-04-11 00:00:00'
 ORDER BY pe.fecha_pedido;
 
 
@@ -105,7 +110,7 @@ SELECT
 FROM detalle_pedidos dp
 JOIN productos pr ON pr.id_producto = dp.id_producto
 GROUP BY pr.id_producto, pr.nombre, pr.categoria
-ORDER BY total_unidades_vendidas DESC;
+ORDER BY total_unidades_vendidas DESC, pr.nombre;
 
 
 -- ---------------------------------------------------------------------------
@@ -120,7 +125,7 @@ SELECT
 FROM clientes c
 LEFT JOIN pedidos pe ON pe.id_cliente = c.id_cliente
 GROUP BY c.id_cliente, c.nombre_completo
-ORDER BY cantidad_pedidos DESC;
+ORDER BY cantidad_pedidos DESC, c.id_cliente;
 
 
 -- ---------------------------------------------------------------------------
@@ -174,7 +179,7 @@ JOIN (
     SELECT id_cliente, COUNT(*) AS cantidad_pedidos
     FROM pedidos
     GROUP BY id_cliente
-    ORDER BY cantidad_pedidos DESC
+    ORDER BY cantidad_pedidos DESC, id_cliente
     LIMIT 1
 ) sub ON sub.id_cliente = c.id_cliente;
 
@@ -195,39 +200,34 @@ GROUP BY s.id_sede, s.nombre_sede
 ORDER BY ingresos_con_iva DESC;
 
 
--- Crear una vista llamada vista_resumen_sedes que:
--- ➢ Muestre por cada sede:
--- ▪ Nombre de la sede
--- ▪ Cantidad total de pedidos despachados
--- ▪ Valor total vendido (sin IVA)
--- ▪ Promedio de valor por pedido
--- ▪ La vista debe usar JOIN entre pedidos y sedes, y agrupar correctamente los
--- resultados
-
-create or replace view vista_resumen_sedes AS
-select
+-- ---------------------------------------------------------------------------
+-- vista_resumen_sedes
+-- Por cada sede con pedidos: cantidad despachada, venta sin IVA y promedio.
+-- INNER JOIN: una sede sin pedidos no aparece en el resumen.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW vista_resumen_sedes AS
+SELECT
     s.id_sede,
     s.nombre_sede,
-    count(p.id_pedido) as total_pedidos,
-    ifnull(sum(p.total_sin_iva), 0) as venta_total, 
-    ifnull(avg(p.total_sin_iva), 0) as promedio_venta
-from sedes s
-join pedidos p on p.id_sede = s.id_sede
-group by s.id_sede, s.nombre_sede;
+    COUNT(p.id_pedido)               AS total_pedidos,
+    IFNULL(SUM(p.total_sin_iva), 0)  AS venta_total,
+    IFNULL(AVG(p.total_sin_iva), 0)  AS promedio_venta
+FROM sedes s
+JOIN pedidos p ON p.id_sede = s.id_sede
+GROUP BY s.id_sede, s.nombre_sede;
 
 
-
--- Realizar una consulta con subconsulta que:
--- ➢ Muestre el nombre del producto, categorí a y stock
--- ➢ Solo incluya los productos cuyo precio sea mayor al promedio general de precios de todos
--- los productos.
-
-select
-    id_producto,
+-- ---------------------------------------------------------------------------
+-- Consulta 9: Productos con precio superior al promedio del catálogo
+-- Subconsulta escalar sobre AVG(precio).
+-- ---------------------------------------------------------------------------
+SELECT
+    nombre,
     categoria,
     stock_actual
-from productos
-where precio > (select avg(precio) from productos);
+FROM productos
+WHERE precio > (SELECT AVG(precio) FROM productos)
+ORDER BY precio DESC, nombre;
 
 
 -- ============================================================================
